@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Status Report</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        table {
+            margin: 20px 0;
+        }
+        th, td {
+            text-align: center;
+        }
+        .table-totals {
+            background-color: #f0f8ff;
+            font-weight: bold;
+        }
+        .highlight-total {
+            background-color: #e6e6e6;
+        }
+        .sortable:hover {
+            cursor: pointer;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <a class="navbar-brand" href="#">Report Viewer</a>
+    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarNav">
+      <ul class="navbar-nav">
+        <li class="nav-item active">
+          <a class="nav-link" href="#">Status Report</a>
+        </li>
+      </ul>
+    </div>
+</nav>
+
+<div class="container">
+    <h1>Status Report</h1>
+
+    <!-- Session input section -->
+    <div id="sessionInput" class="mb-3" style="display:none;">
+        <label for="sessionField">Enter your session:</label>
+        <input type="text" id="sessionField" class="form-control" placeholder="Enter session value">
+        <button id="confirmSession" class="btn btn-primary mt-2">Confirm</button>
+    </div>
+
+    <div id="accountButtons" class="mb-3"></div> <!-- Container for account buttons -->
+    <div class="mb-3">
+        <button id="downloadExcel" class="btn btn-success">Download as Excel</button>
+        <button id="sortDate" class="btn btn-primary">Sort by Date (Ascending)</button>
+    </div>
+    <div id="output"></div>
+    
+</div>
+
+<!-- Add the XLSX library for exporting to Excel -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<script>
+// Function to format numbers as currency with dollar signs and commas
+function formatCurrency(value) {
+    return '$' + parseFloat(value).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+// Function to get the Monday of the week for any given date
+function getStartOfWeek(date) {
+    const result = new Date(date);
+    const day = result.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    result.setDate(result.getDate() + diff);
+    result.setHours(0, 0, 0, 0);
+    return result;
+}
+
+// Function to check if two dates fall within the same week
+function isSameCalendarWeek(date1, date2) {
+    const startOfWeek1 = getStartOfWeek(date1);
+    const startOfWeek2 = getStartOfWeek(date2);
+    return startOfWeek1.getTime() === startOfWeek2.getTime();
+}
+
+// Fetch JSON data
+async function fetchJSON(url) {
+    console.log(`fetch json called: ${url}`)
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+}
+
+// Store session value
+const urlParams = new URLSearchParams(window.location.search);
+let sessionValue = urlParams.get('session'); // Get session from URL if provided
+const accountValue = urlParams.get('account'); // Get selected account from URL
+
+// Fetch accounts dynamically
+async function fetchAccounts(session) {
+    const accountsData = await fetchJSON(`https://www.myfxbook.com/api/get-my-accounts.json?session=${session}`);
+    if (accountsData.error) {
+        throw new Error('Failed to fetch accounts: ' + accountsData.message);
+    }
+    return accountsData.accounts.map(account => ({ id: account.id, name: account.name }));
+}
+
+// Display session input if no session found
+function showSessionInput() {
+    const sessionInput = document.getElementById('sessionInput');
+    sessionInput.style.display = 'block';
+    document.getElementById('confirmSession').addEventListener('click', () => {
+        const sessionField = document.getElementById('sessionField');
+        sessionValue = sessionField.value;
+        if (sessionValue) {
+            window.location.href = `?session=${sessionValue}`;
+        }
+    });
+}
+
+// Create account buttons
+function createAccountButtons(accounts) {
+    const accountButtonsContainer = document.getElementById('accountButtons');
+    accountButtonsContainer.innerHTML = ''; // Clear existing buttons
+
+    accounts.forEach(account => {
+        const button = document.createElement('button');
+        button.className = account.id == accountValue ? 'btn btn-primary m-1' : 'btn btn-secondary m-1';
+        button.textContent = account.name;
+        button.onclick = () => {
+            window.location.href = `?account=${account.id}&session=${sessionValue}`;
+        };
+        accountButtonsContainer.appendChild(button);
+    });
+}
+
+// Store fetched data for display
+let fetchedData;
+
+// Fetch and process data for the selected account
+async function fetchAndProcessData(accountValue) {
+    const dailyData = {
+        dateArray: [],
+        startingBalanceArray: [],
+        profitArray: [],
+        endingBalanceArray: [],
+        floatingPLArray: [],
+        dailyGainPercentArray: [],
+        lotsArray: []
+    };
+
+    const dataDaily = await fetchJSON(`https://www.myfxbook.com/api/get-data-daily.json?session=${sessionValue}&id=${accountValue}&start=2000-01-01&end=2030-01-01`);
+    const dailyGain = await fetchJSON(`https://www.myfxbook.com/api/get-daily-gain.json?session=${sessionValue}&id=${accountValue}&start=2000-01-01&end=2030-01-01`);
+
+    let lastGain = 0;
+
+    dataDaily.dataDaily.forEach((dayData, index) => {
+        const dailyRecord = dayData[0];
+        const gainRecord = dailyGain.dailyGain[index][0];
+
+        if (!dailyRecord || !gainRecord) {
+            console.error(`Missing data for index ${index}:`, dailyRecord, gainRecord);
+            return;
+        }
+
+        const date = new Date(dailyRecord.date);
+        const balance = dailyRecord.balance;
+        const profit = dailyRecord.profit;
+        const lots = dailyRecord.lots;
+
+        const startingBalance = balance - profit;
+        const endingBalance = balance;
+        const FloatingPL = dailyRecord.floatingPL
+
+        const dailyGainPercent = (gainRecord.value - lastGain).toFixed(2);
+        lastGain = gainRecord.value;
+
+
+        dailyData.dateArray.push(date);
+        dailyData.startingBalanceArray.push(startingBalance.toFixed(2));
+        dailyData.profitArray.push(profit.toFixed(2));
+        dailyData.endingBalanceArray.push(endingBalance.toFixed(2));
+        dailyData.floatingPLArray.push(FloatingPL.toFixed(2));
+        dailyData.dailyGainPercentArray.push(dailyGainPercent + "%");
+        dailyData.lotsArray.push(lots.toFixed(2));
+    });
+
+    return dailyData;
+}
+
+// Display the data in a table
+function displayTable(dailyData) {
+    const output = document.getElementById('output');
+    output.innerHTML = ''; // Clear existing table
+
+    const table = document.createElement('table');
+    table.classList.add('table', 'table-striped', 'table-hover', 'table-bordered');
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    headerRow.innerHTML = `
+        <th class="sortable">Date</th>
+        <th>Starting Balance</th>
+        <th>Profit</th>
+        <th>Ending Balance</th>
+        <th>FloatingPL</th>
+        <th>Daily Gain %</th>
+        <th>Lots</th>
+    `;
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    let weeklyTotalProfit = 0;
+    let weeklyTotalGain = 0;
+    let weeklyTotalLots = 0;
+    let currentWeekStart = getStartOfWeek(dailyData.dateArray[0]);
+
+    dailyData.dateArray.forEach((date, index) => {
+        // Check if the current date belongs to a new week before adding it
+        if (!isSameCalendarWeek(currentWeekStart, date)) {
+            // Add totals for the week that just ended
+            const totalsRow = document.createElement('tr');
+            totalsRow.classList.add('table-totals');
+            totalsRow.innerHTML = `
+                <td colspan="2"><strong>Week Totals</strong></td>
+                <td>${formatCurrency(weeklyTotalProfit)}</td>
+                <td></td><td></td>
+                <td>${weeklyTotalGain.toFixed(2)}%</td>
+                <td>${weeklyTotalLots.toFixed(2)}</td>
+            `;
+            tbody.appendChild(totalsRow);
+
+            // Reset weekly totals for the new week
+            weeklyTotalProfit = 0;
+            weeklyTotalGain = 0;
+            weeklyTotalLots = 0;
+
+            // Update to the new week's start
+            currentWeekStart = getStartOfWeek(date);
+        }
+
+        const row = document.createElement('tr');
+        row.innerHTML = `
+            <td>${date.toLocaleDateString()}</td>
+            <td>${formatCurrency(dailyData.startingBalanceArray[index])}</td>
+            <td>${formatCurrency(dailyData.profitArray[index])}</td>
+            <td>${formatCurrency(dailyData.endingBalanceArray[index])}</td>
+            <td>${dailyData.floatingPLArray[index]}</td>
+            <td>${dailyData.dailyGainPercentArray[index]}</td>
+            <td>${dailyData.lotsArray[index]}</td>
+        `;
+        tbody.appendChild(row);
+
+        // Update weekly totals
+        weeklyTotalProfit += parseFloat(dailyData.profitArray[index]);
+        weeklyTotalGain += parseFloat(dailyData.dailyGainPercentArray[index].replace('%', ''));
+        weeklyTotalLots += parseFloat(dailyData.lotsArray[index]);
+    });
+
+    // Add totals for the last week if there are records
+    if (dailyData.dateArray.length > 0) {
+        const totalsRow = document.createElement('tr');
+        totalsRow.classList.add('table-totals');
+        totalsRow.innerHTML = `
+            <td colspan="2"><strong>Week Totals</strong></td>
+            <td>${formatCurrency(weeklyTotalProfit)}</td>
+            <td></td>
+            <td>${weeklyTotalGain.toFixed(2)}%</td>
+            <td>${weeklyTotalLots.toFixed(2)}</td>
+        `;
+        tbody.appendChild(totalsRow);
+    }
+
+    table.appendChild(tbody);
+    output.appendChild(table);
+}
+
+let accounts = [];  // Global variable to store fetched accounts
+
+// Handle downloading as Excel with header and subheader
+document.getElementById('downloadExcel').addEventListener('click', () => {
+    const table = document.querySelector('table');
+    if (table) {
+        // Create a new workbook
+        const workbook = XLSX.utils.book_new();
+
+        // Create an empty sheet data array
+        const sheetData = [];
+
+        // Add the header row (Status Report)
+        sheetData.push(["Status Report"]);
+
+        // Add the subheader row (Account name and number)
+        const accountName = accounts.find(account => account.id == accountValue).name;
+        sheetData.push([`Account: ${accountName} (#${accountValue})`]);
+
+        // Add an empty row for spacing
+        sheetData.push([]);
+
+        // Convert sheetData array into a worksheet
+        const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+        XLSX.utils.sheet_add_dom(worksheet, table, {origin: -1});
+
+        // Add the worksheet to the workbook
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Status Report');
+
+        // Write the workbook to file
+        XLSX.writeFile(workbook, 'StatusReport.xlsx');
+    }
+});
+
+
+// Sort the table by date descending
+// Variable to track the current sort order
+let sortOrder = 'desc'; // 'desc' for descending, 'asc' for ascending
+
+// Sort the table by date
+document.getElementById('sortDate').addEventListener('click', () => {
+    if (fetchedData) {
+        // Create an array of objects to facilitate sorting
+        const combinedData = fetchedData.dateArray.map((date, index) => ({
+            date: date,
+            startingBalance: fetchedData.startingBalanceArray[index],
+            profit: fetchedData.profitArray[index],
+            endingBalance: fetchedData.endingBalanceArray[index],
+            folatingPL: fetchedData.floatingPLArray[index],
+            dailyGainPercent: fetchedData.dailyGainPercentArray[index],
+            lots: fetchedData.lotsArray[index],
+        }));
+
+        // Sort combined data based on the current sort order
+        combinedData.sort((a, b) => {
+            return sortOrder === 'desc' ? b.date - a.date : a.date - b.date;
+        });
+
+        // Unpack sorted data back into arrays
+        fetchedData.dateArray = combinedData.map(item => item.date);
+        fetchedData.startingBalanceArray = combinedData.map(item => item.startingBalance);
+        fetchedData.profitArray = combinedData.map(item => item.profit);
+        fetchedData.endingBalanceArray = combinedData.map(item => item.endingBalance);
+        fetchedData.floatingPLArray = combinedData.map(item => item.folatingPL);
+        fetchedData.dailyGainPercentArray = combinedData.map(item => item.dailyGainPercent);
+        fetchedData.lotsArray = combinedData.map(item => item.lots);
+
+        // Display the sorted table
+        displayTable(fetchedData);
+
+        // Toggle the sort order for next click
+        sortOrder = (sortOrder === 'desc') ? 'asc' : 'desc';
+
+        // Update button text based on current sort order
+        document.getElementById('sortDate').textContent = `Sort by Date (${sortOrder === 'desc' ? 'Ascending' : 'Descending'})`;
+    }
+});
+
+// Main function to initialize the page
+async function init(accountList = null) {
+    try {
+        if (!sessionValue) {
+            showSessionInput(); // Show session input if no session found
+            return;
+        }
+
+        accounts = accountList;
+        if (!accounts) {
+            // Fetch accounts dynamically if no account list is provided
+            accounts = await fetchAccounts(sessionValue);
+        }
+
+        createAccountButtons(accounts);
+
+        if (accountValue) {
+            fetchedData = await fetchAndProcessData(accountValue);
+            displayTable(fetchedData);
+        } else {
+            document.getElementById('output').innerHTML = '<p>Please select an account to view its status report.</p>';
+        }
+    } catch (error) {
+        console.error('Error initializing page:', error);
+        document.getElementById('output').innerHTML = `<p>Error: ${error.message}</p>`;
+    }
+}
+
+init();
+</script>
+</body>
+</html>
