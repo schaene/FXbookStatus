@@ -40,15 +40,27 @@
       </ul>
     </div>
 </nav>
+<p id="sessionBox"></p>
 
 <div class="container">
     <h1>Status Report</h1>
 
     <!-- Session input section -->
     <div id="sessionInput" class="mb-3" style="display:none;">
-        <label for="sessionField">Enter your session:</label>
-        <input type="text" id="sessionField" class="form-control" placeholder="Enter session value">
-        <button id="confirmSession" class="btn btn-primary mt-2">Confirm</button>
+        <h4>Enter your MyFXBook login:</h4>
+        <div class="mb-3">
+            <label for="emailField" class="form-label">Email address:</label>
+            <input type="email" class="form-control" id="emailField" placeholder="Enter Email">
+        </div>
+        <div class="mb-3">
+            <label for="passwordField" class="form-label">Password:</label>
+            <input type="password" class="form-control" id="passwordField" placeholder="Enter Password">
+        </div>
+        <button id="confirmLogin" class="btn btn-primary">Submit</button>
+        <p>Or:</p>
+        <label for="sessionField">Enter your MyFXBook session ID:</label>
+        <input type="text" id="sessionField" class="form-control" placeholder="Enter session ID">
+        <button id="confirmSession" class="btn btn-primary mt-2">Confirm Session ID</button>
     </div>
 
     <div id="accountButtons" class="mb-3"></div> <!-- Container for account buttons -->
@@ -111,12 +123,23 @@ async function fetchAccounts(session) {
 }
 
 // Display session input if no session found
-function showSessionInput() {
+async function showSessionInput() {
     const sessionInput = document.getElementById('sessionInput');
     sessionInput.style.display = 'block';
     document.getElementById('confirmSession').addEventListener('click', () => {
         const sessionField = document.getElementById('sessionField');
         sessionValue = sessionField.value;
+        if (sessionValue) {
+            window.location.href = `?session=${sessionValue}`;
+        }
+    });
+
+    document.getElementById('confirmLogin').addEventListener('click', async () => {
+        const emailField = document.getElementById('emailField');
+        const passwordField = document.getElementById('passwordField');
+        const sessionInfo = await fetchJSON(`https://www.myfxbook.com/api/login.json?email=${emailField.value}&password=${passwordField.value}`);
+        console.log(sessionInfo);
+        sessionValue = sessionInfo.session;
         if (sessionValue) {
             window.location.href = `?session=${sessionValue}`;
         }
@@ -366,6 +389,9 @@ async function init(accountList = null) {
         if (!sessionValue) {
             showSessionInput(); // Show session input if no session found
             return;
+        } else{
+            const sessionShow = document.getElementById("sessionBox");
+            sessionShow.innerHTML = `Session ID: ${sessionValue}`
         }
 
         accounts = accountList;
